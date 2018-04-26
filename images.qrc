@@ -1,0 +1,19 @@
+<RCC>
+    <qresource prefix="/">
+        <file>image/radio1.png</file>
+        <file>image/start.png</file>
+        <file>image/stop.png</file>
+        <file>image/down.png</file>
+        <file>image/left.png</file>
+        <file>image/right.png</file>
+        <file>image/up.png</file>
+        <file>image/up1.png</file>
+        <file>image/down1.png</file>
+        <file>image/left1.png</file>
+        <file>image/right1.png</file>
+        <file>image/radio2.png</file>
+        <file>image/radioselect.png</file>
+        <file>image/radio3.png</file>
+        <file>image/close.png</file>
+    </qresource>
+</RCC>
