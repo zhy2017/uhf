@@ -71,7 +71,7 @@ Widget::Widget(QWidget *parent) :
 
       setAutoStart(true);//设置开机自启动
 
-      this->showFullScreen();
+     // this->showFullScreen();
 }
 
 
