@@ -10,6 +10,16 @@ class SendTask;
 class QTcpSocket;
 class QFile;
 class QSerialPort;
+class QProcess;
+
+typedef enum
+{
+    CMD_NORMAL = -1,
+    CMD_INIT_PRESS,
+    CMD_INIT_AD9371,
+    CMD_INIT_PL
+}ECMD;
+
 
 namespace Ui {
 class Widget;
@@ -143,8 +153,11 @@ private:
     bool sendCalibration;//是否发送校准命令
     SendTask *m_sendTask;
     int maxIndex;
-    int m_timerId;
+    int m_timerId;//用来限制幅度的输入
+    int m_aliveId;//用来和服务器维持心跳
+    QProcess* cmd;
     int currentIndex;
+    int freValue;//从文件中读取的频率差值
     QMap<int, myTumbler*> m_index;
     QByteArray serialData;
     QByteArray serialFreData;
@@ -152,6 +165,13 @@ private:
     QByteArray seData;//校准命令
     QMap<int, int>  m_excelData;
     quint32 preFre;//保存上一次的频率值
+    quint32 m_pressValue;//文件中保存的压控震荡器值
+    ECMD m_cmd;
+    bool m_bInit;//初始化一次标志
+    void initDevice();//开机初始化
+    void pressureControl();//压控震荡器设置
+    void initAD9371();//初始化AD9371
+    void initPL();//初始化PL
     void gpio_send();
     void set_send();
     void fre_send();

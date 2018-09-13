@@ -15,5 +15,7 @@
         <file>image/radioselect.png</file>
         <file>image/radio3.png</file>
         <file>image/close.png</file>
+        <file>image/arrowBottom.png</file>
+        <file>image/reset.png</file>
     </qresource>
 </RCC>

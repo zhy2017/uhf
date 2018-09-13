@@ -13,6 +13,7 @@
 #include <QSettings>
 #include <windows.h>
 #include <QKeyEvent>
+#include <QProcess>
 
 #define REG_RUN "HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run"
 
@@ -33,7 +34,10 @@ Widget::Widget(QWidget *parent) :
     ui->interval1Edit->installEventFilter(this);
     ui->timeEdit->installEventFilter(this);
     ui->interval2Edit->installEventFilter(this);
+    ui->delayEdit->installEventFilter(this);
 
+     m_cmd = CMD_NORMAL;
+     m_bInit = false;
      waitFMC = false;
      startOrStop = false;
      sendFlag = false;
@@ -52,6 +56,7 @@ Widget::Widget(QWidget *parent) :
      preFre = 0;
      endFlag = false;
      tcpClient = new QTcpSocket(this);
+     cmd = new QProcess;
 
      //当服务器连接成功时，发出connected()信号，我们开始传送文件
      connect(tcpClient, SIGNAL(connected()), this, SLOT(sendData()));
@@ -72,6 +77,8 @@ Widget::Widget(QWidget *parent) :
       setAutoStart(true);//设置开机自启动
 
       this->showFullScreen();
+      m_timerId = startTimer(200);
+      m_aliveId = startTimer(1000);//开启维持心跳定时器
 }
 
 
@@ -110,16 +117,67 @@ void Widget::timerEvent(QTimerEvent *event)
 {
     if(event->timerId() == m_timerId)
     {
-        if(m_sendTask != NULL)
+        if(ui->amplifierClose->isChecked())
         {
-            int progress = 0;
-            progress = m_sendTask->GetProgress();
-            ui->roundBar1->setValue(progress);
-            if(progress == 100)
+            QString str_value = QString::number(ui->dwidget1->getCurrentIndex()) + QString::number(ui->dwidget2->getCurrentIndex()) + "." + QString::number(ui->dwidget3->getCurrentIndex());
+            double value = str_value.toDouble();
+            if(ui->label_4->text() != "-")
             {
-                killTimer(m_timerId); // 关闭定时器
-                ui->roundBar1->setValue(0);
+                ui->dwidget1->setCurrentIndex(0);
+                ui->dwidget2->setCurrentIndex(0);
+                ui->dwidget3->setCurrentIndex(0);
             }
+            else
+            {
+                if(value > 40.0)
+                {
+                    ui->dwidget1->setCurrentIndex(4);
+                    ui->dwidget2->setCurrentIndex(0);
+                    ui->dwidget3->setCurrentIndex(0);
+                }
+            }
+        }
+        else
+        {
+             QString str_value = QString::number(ui->dwidget1->getCurrentIndex()) + QString::number(ui->dwidget2->getCurrentIndex()) + "." + QString::number(ui->dwidget3->getCurrentIndex());
+             double value = str_value.toDouble();
+             if(ui->label_4->text() == "-")
+             {
+                 if(value > 10.0)
+                 {
+                     ui->dwidget1->setCurrentIndex(1);
+                     ui->dwidget2->setCurrentIndex(0);
+                     ui->dwidget3->setCurrentIndex(0);
+                 }
+             }
+             else
+             {
+                 if(value > 37.0)
+                 {
+                     ui->dwidget1->setCurrentIndex(3);
+                     ui->dwidget2->setCurrentIndex(7);
+                     ui->dwidget3->setCurrentIndex(0);
+                 }
+             }
+        }
+    }
+    else if(event->timerId() == m_aliveId)
+    {
+        QString strArg = "ping 192.168.0.10 -n 1 -w 2000";
+        cmd->start(strArg);
+        cmd->waitForReadyRead();
+        cmd->waitForFinished();
+        QString retStr = cmd->readAll();
+        if (retStr.indexOf("TTL") != -1)
+        {
+            QListWidgetItem *item = ui->listWidget->item(0);
+            item->setText(QString("设备在线"));
+            initDevice();
+        }
+        else
+        {
+            QListWidgetItem *item = ui->listWidget->item(0);
+            item->setText(QString("设备离线"));
         }
     }
 }
@@ -154,11 +212,29 @@ bool Widget::eventFilter(QObject *watched, QEvent *event)
             lineSelect = 4;
         }
     }
+    else if(watched == ui->delayEdit)
+    {
+        if(event->type() == QEvent::FocusIn)
+        {
+            lineSelect = 5;
+        }
+    }
     return QWidget::eventFilter(watched, event);
 }
 
 void Widget::initForm()
 {
+    ui->comboBox->setStyleSheet("QComboBox {height: 25px; border-radius: 4px; border: 1px solid rgb(111, 156, 207);background: white;}"
+                        "QComboBox:enabled { color: rgb(84, 84, 84);}"
+                        "QComboBox:!enabled { color: rgb(80, 80, 80);}"
+                        "QComboBox:enabled:hover, QComboBox:enabled:focus {color: rgb(51, 51, 51);}"
+                        "QComboBox::drop-down {width: 20px; border: none;background: transparent;}"
+                        "QComboBox::drop-down:hover {background: rgba(255, 255, 255, 30);}"
+                        "QComboBox::down-arrow {image: url(:/image/arrowBottom.png);}"
+                        "QComboBox::down-arrow:on { /**top: 1px;**/}"
+                        "QComboBox QAbstractItemView {border: 1px solid rgb(111, 156, 207);background: white; outline: none;}"
+                        "QComboBox QAbstractItemView::item { height: 25px; color: rgb(73, 73, 73);}"
+                        "QComboBox QAbstractItemView::item:selected {background: rgb(232, 241, 250); color: rgb(2, 65, 132);}");
     ui->loopRadio->setStyleSheet("QRadioButton{background: transparent;color:white;} "
                                    "QRadioButton:indicator{width:20px;height:20px;}"
                                    "QRadioButton:indicator:unchecked{image:url(:/image/radio2.png)}"
@@ -327,6 +403,7 @@ void Widget::initForm()
     ui->loopRadio->setChecked(true);
     on_loopRadio_clicked();
     ui->amplifierClose->setChecked(true);
+    ui->delayEdit->setText("0");
 }
 
 void Widget::initStopData()
@@ -427,10 +504,12 @@ void Widget::initExcelData()
 
     QTextStream in(&file);
     line = in.readLine();
+    m_pressValue = line.toInt();
+    line = in.readLine();
     QStringList list1 = line.split(',');
     QString key = list1.at(0);
     QString value = list1.at(1);
-    m_excelData.insert(key.toInt(), value.toInt());
+    freValue = value.toInt();
     while (!line.isNull())
     {
         line = in.readLine();
@@ -480,7 +559,6 @@ int Widget::getAmplitude(int fre)
 {
     QMap<int, int>::iterator it;
     int value;
-    qDebug() << "fre" << fre;
     for(it = m_excelData.begin(); it != m_excelData.end(); it++)
     {
         if(fre < (it.key() * 10000))
@@ -856,16 +934,19 @@ void Widget::set_send()
     if(preFre == 0)
     {
         sendCalibration = true;
+        seData[16] = 0x03;
         preFre = data;
     }
     else if(abs(data - preFre) >= 2000000)
     {
         sendCalibration = true;
+        seData[16] = 0x03;
         preFre = data;
     }
     else
     {
-        sendCalibration = false;
+        seData[16] = 0x00;
+        sendCalibration = true;
     }
   //  qDebug() << data1;
     if(data1 <= 800)
@@ -909,6 +990,8 @@ void Widget::set_send()
             serialData[15 + i] = 0xAA;
         }
     }
+
+    data += freValue;
     QString str1 = QString::number(data, 16);
     QByteArray datagram1;
     if(str1.size() < 8)
@@ -1144,16 +1227,19 @@ void Widget::fre_send()
     if(preFre == 0)
     {
         sendCalibration = true;
+        seData[16] = 0x03;
         preFre = data;
     }
     else if(abs(data - preFre) >= 2000000)
     {
         sendCalibration = true;
+        seData[16] = 0x03;
         preFre = data;
     }
     else
     {
-        sendCalibration = false;
+        seData[16] = 0x00;
+        sendCalibration = true;
     }
     if(data1 <= 800)
     {
@@ -1197,6 +1283,7 @@ void Widget::fre_send()
         }
     }
 
+    data += freValue;
     QString str1 = QString::number(data, 16);
     QByteArray datagram1;
     if(str1.size() < 8)
@@ -1554,6 +1641,14 @@ void Widget::on_num1Btn_clicked()
         ui->interval2Edit->setFocus();
         break;
 
+    case 5:
+        value = ui->delayEdit->text();
+        value = value + number;
+        ui->delayEdit->setText(value);
+        ui->delayEdit->setFocus();
+        break;
+
+
     default:
         break;
     }
@@ -1614,6 +1709,13 @@ void Widget::on_num2Btn_clicked()
         ui->interval2Edit->setFocus();
         break;
 
+    case 5:
+        value = ui->delayEdit->text();
+        value = value + number;
+        ui->delayEdit->setText(value);
+        ui->delayEdit->setFocus();
+        break;
+
     default:
         break;
     }
@@ -1672,6 +1774,13 @@ void Widget::on_num3Btn_clicked()
         value = value + number;
         ui->interval2Edit->setText(value);
         ui->interval2Edit->setFocus();
+        break;
+
+    case 5:
+        value = ui->delayEdit->text();
+        value = value + number;
+        ui->delayEdit->setText(value);
+        ui->delayEdit->setFocus();
         break;
 
     default:
@@ -1752,6 +1861,13 @@ void Widget::on_num4Btn_clicked()
         ui->interval2Edit->setFocus();
         break;
 
+    case 5:
+        value = ui->delayEdit->text();
+        value = value + number;
+        ui->delayEdit->setText(value);
+        ui->delayEdit->setFocus();
+        break;
+
     default:
         break;
     }
@@ -1828,6 +1944,13 @@ void Widget::on_num5Btn_clicked()
         value = value + number;
         ui->interval2Edit->setText(value);
         ui->interval2Edit->setFocus();
+        break;
+
+    case 5:
+        value = ui->delayEdit->text();
+        value = value + number;
+        ui->delayEdit->setText(value);
+        ui->delayEdit->setFocus();
         break;
 
     default:
@@ -1908,6 +2031,13 @@ void Widget::on_num6Btn_clicked()
         ui->interval2Edit->setFocus();
         break;
 
+    case 5:
+        value = ui->delayEdit->text();
+        value = value + number;
+        ui->delayEdit->setText(value);
+        ui->delayEdit->setFocus();
+        break;
+
     default:
         break;
     }
@@ -1984,6 +2114,13 @@ void Widget::on_num7Btn_clicked()
         value = value + number;
         ui->interval2Edit->setText(value);
         ui->interval2Edit->setFocus();
+        break;
+
+    case 5:
+        value = ui->delayEdit->text();
+        value = value + number;
+        ui->delayEdit->setText(value);
+        ui->delayEdit->setFocus();
         break;
 
     default:
@@ -2074,6 +2211,13 @@ void Widget::on_num8Btn_clicked()
         ui->interval2Edit->setFocus();
         break;
 
+    case 5:
+        value = ui->delayEdit->text();
+        value = value + number;
+        ui->delayEdit->setText(value);
+        ui->delayEdit->setFocus();
+        break;
+
     default:
         break;
     }
@@ -2162,6 +2306,13 @@ void Widget::on_num9Btn_clicked()
         ui->interval2Edit->setFocus();
         break;
 
+    case 5:
+        value = ui->delayEdit->text();
+        value = value + number;
+        ui->delayEdit->setText(value);
+        ui->delayEdit->setFocus();
+        break;
+
     default:
         break;
     }
@@ -2230,6 +2381,16 @@ void Widget::on_negativeBtn_clicked()
         }
         break;
 
+    case 5:
+        value = ui->delayEdit->text();
+        ok = value.contains('-');
+        {
+            value = value.insert(0, number);
+            ui->delayEdit->setText(value);
+            ui->delayEdit->setFocus();
+        }
+        break;
+
     default:
         break;
     }
@@ -2280,6 +2441,13 @@ void Widget::on_num0Btn_clicked()
         ui->interval2Edit->setFocus();
         break;
 
+    case 5:
+        value = ui->delayEdit->text();
+        value = value + number;
+        ui->delayEdit->setText(value);
+        ui->delayEdit->setFocus();
+        break;
+
     default:
         break;
     }
@@ -2323,6 +2491,13 @@ void Widget::on_num000Btn_clicked()
         ui->interval2Edit->setFocus();
         break;
 
+    case 5:
+        value = ui->delayEdit->text();
+        value = value + number;
+        ui->delayEdit->setText(value);
+        ui->delayEdit->setFocus();
+        break;
+
     default:
         break;
     }
@@ -2359,6 +2534,12 @@ void Widget::on_delBtn_clicked()
         value = ui->interval2Edit->text();
         value = value.left(value.size() - 1);
         ui->interval2Edit->setText(value);
+        break;
+
+    case 5:
+        value = ui->delayEdit->text();
+        value = value.left(value.size() - 1);
+        ui->delayEdit->setText(value);
         break;
 
     default:
@@ -2411,6 +2592,11 @@ void Widget::on_acBtn_clicked()
         ui->interval2Edit->setFocus();
         break;
 
+    case 5:
+        ui->delayEdit->clear();
+        ui->delayEdit->setFocus();
+        break;
+
     default:
         break;
     }
@@ -2427,71 +2613,6 @@ void Widget::on_okBtn_clicked()
         {
             fre_send();
         }
-
-       // qDebug() << getAmplitude(data);
-     /*   if(currentIndex == 1)
-        {
-            QStringList list1 = keyData.split('.');
-            if(list1.size() == 1)
-            {
-                quint32 data = list1.at(0).toInt();
-                if((data / 1000 % 10) > 3)
-                {
-                    ui->fwidget1->setCurrentIndex(3);
-                }
-                else
-                {
-                    ui->fwidget1->setCurrentIndex(data / 1000 % 10);
-                }
-                ui->fwidget2->setCurrentIndex(data / 100 % 10);
-                ui->fwidget3->setCurrentIndex(data / 10 % 10);
-                ui->fwidget4->setCurrentIndex(data % 10);
-                keyData.clear();
-            }
-            else if(list1.size() == 2)
-            {
-                quint32 data = list1.at(0).toInt();
-                if((data / 1000 % 10) > 3)
-                {
-                    ui->fwidget1->setCurrentIndex(3);
-                }
-                else
-                {
-                    ui->fwidget1->setCurrentIndex(data / 1000 % 10);
-                }
-                ui->fwidget2->setCurrentIndex(data / 100 % 10);
-                ui->fwidget3->setCurrentIndex(data / 10 % 10);
-                ui->fwidget4->setCurrentIndex(data % 10);
-
-                data = list1.at(1).toInt();
-                ui->fwidget5->setCurrentIndex(data / 1000 % 10);
-                ui->fwidget6->setCurrentIndex(data / 100 % 10);
-                ui->fwidget7->setCurrentIndex(data / 10 % 10);
-                ui->fwidget8->setCurrentIndex(data % 10);
-                keyData.clear();
-            }
-        }
-        else if(currentIndex == 9)
-        {
-            QStringList list1 = keyData.split('.');
-            if(list1.size() == 1)
-            {
-                quint32 data = list1.at(0).toInt();
-                ui->dwidget1->setCurrentIndex(data / 10 % 10);
-                ui->dwidget2->setCurrentIndex(data % 10);
-                keyData.clear();
-            }
-            else if(list1.size() == 2)
-            {
-                quint32 data = list1.at(0).toInt();
-                ui->dwidget1->setCurrentIndex(data / 10 % 10);
-                ui->dwidget2->setCurrentIndex(data % 10);
-
-                data = list1.at(1).toInt();
-                ui->dwidget3->setCurrentIndex(data % 10);
-                keyData.clear();
-            }
-        }*/
         break;
 
     case 1:
@@ -2508,6 +2629,10 @@ void Widget::on_okBtn_clicked()
 
     case 4:
         ui->interval2Edit->clearFocus();
+        break;
+
+    case 5:
+        ui->delayEdit->clearFocus();
         break;
 
     default:
@@ -2560,6 +2685,23 @@ void Widget::on_pushButton_clicked()
 {
     if(!startOrStop)
     {
+        if(ui->loopRadio->isChecked())
+        {
+            int time = ui->delayEdit->text().toInt();
+            if(time != 0)
+            {
+                m_timerId = startTimer(time * 1000);
+                ui->pushButton->setIcon(QIcon(":/image/close.png"));
+                ui->label_14->setText(QString("停止"));
+                startOrStop = true;
+                QListWidgetItem *item = ui->listWidget->item(1);
+                item->setText(QString("信号源已开启"));
+                ui->widget_6->setEnabled(false);
+                ui->widget_8->setEnabled(false);
+                return;
+            }
+        }
+
         if(setClient->isValid())
         {
             setClient->close();
@@ -2567,7 +2709,7 @@ void Widget::on_pushButton_clicked()
         ui->pushButton->setIcon(QIcon(":/image/close.png"));
         ui->label_14->setText(QString("停止"));
         startOrStop = true;
-        QListWidgetItem *item = ui->listWidget->item(0);
+        QListWidgetItem *item = ui->listWidget->item(1);
         item->setText(QString("信号源已开启"));
         setClient->connectToHost("192.168.0.10", 5010);//连接
 
@@ -2578,16 +2720,22 @@ void Widget::on_pushButton_clicked()
     {
         ui->pushButton->setIcon(QIcon(":/image/start.png"));
         ui->label_14->setText(QString("启动"));
-        QListWidgetItem *item = ui->listWidget->item(0);
+        QListWidgetItem *item = ui->listWidget->item(1);
         item->setText(QString("信号源已关闭"));
         endFlag = true;
-        setClient->write(stopData);
+        if(setClient->isValid())
+        {
+            setClient->write(stopData);
+        }
         ui->roundBar1->setValue(0);
         startOrStop = false;
         ui->widget_6->setEnabled(true);
         ui->widget_8->setEnabled(true);
-        ui->amplifierClose->setChecked(true);
-        on_amplifierClose_clicked(true);
+        if(ui->amplifierOpen->isChecked())
+        {
+            ui->amplifierClose->setChecked(true);
+            on_amplifierClose_clicked(true);
+        }
     }
 }
 
@@ -2694,7 +2842,27 @@ void Widget::receiveSetData()
     qDebug() << hex << data;
     if((0x4A == data[0]) && (0x5A == data[12]))//接收到命令/数据反馈
     {
-        qDebug() << "receive set return";
+        switch (m_cmd)
+        {
+        case CMD_NORMAL:
+            break;
+
+        case CMD_INIT_PRESS:
+            initAD9371();
+            break;
+
+        case CMD_INIT_AD9371:
+            initPL();
+            break;
+
+        case CMD_INIT_PL:
+            m_cmd = CMD_NORMAL;
+            break;
+
+        default:
+            break;
+        }
+
         if(!waitSet)
         {
                qDebug() << "send data";
@@ -2759,9 +2927,6 @@ void Widget::receiveSetData()
         {
             qDebug() << "receive fre return";
             freFlag = false;
-           // calibrationFlag2 = true;
-           //calibrationFlag_send();
-             //serial_fre_send();
             serialFlag1 = true;
             serialSend();
             return;
@@ -2772,13 +2937,6 @@ void Widget::receiveSetData()
             setClient->write(stopData);
         }
     }
-    //if((0x2A == data[0]) && (0xAA == data[16]))//接收到FMC反馈
-   // {
-   //     qDebug() << "recive FMC return";
-   //     if(waitFMC && waitSet)
-      //  {
-   //     }
-   // }
 }
 
 void Widget::startSet()
@@ -2790,6 +2948,267 @@ void Widget::sendData()
 {
     sendFlag = true;
     tcpClient->write(stopData);
+}
+
+/*
+ * 初始化压控震荡器
+*/
+void Widget::pressureControl()
+{
+    QByteArray datagram;
+    datagram.resize(21);
+
+    //帧头
+    for(int i = 0; i < 8; i++)
+    {
+        datagram[i] = 0x1A;
+    }
+
+    //参数个数
+    datagram[8] = 0x01;
+
+    //参数
+    QString str = QString::number(m_pressValue, 16);
+    QByteArray datagram2;
+    if(str.size() < 4)
+    {
+        QString tmp;
+        int length = 4 - str.size();
+        for(int i = 0; i < length; i++)
+        {
+             tmp = tmp + "0";
+        }
+            str = tmp + str;
+    }
+    datagram2 = hexStringtoByteArray(str);
+    datagram2.resize(2);
+    datagram[9] = 0x0C;
+    datagram[10] = 0x00;
+    datagram[11] = datagram2[1];
+    datagram[12] = datagram2[0];
+
+    //帧尾
+    for(int i = 0; i < 8; i++)
+    {
+        datagram[i + 13] = 0xAA;
+    }
+
+    setClient->write(datagram);
+    m_cmd = CMD_INIT_PRESS;
+}
+
+/*
+ * 初始化AD9371+射频通道参数
+*/
+void Widget::initAD9371()
+{
+    QByteArray datagram;
+    datagram.resize(76);
+    //帧头
+    for(int i = 0; i < 8; i++)
+    {
+        datagram[i] = 0x0A;
+    }
+
+    datagram[8] = 0x07;
+    datagram[9] = 0x00;
+    datagram[10] = 0x00;
+    datagram[11] = 0x00;
+
+    //频率
+    datagram[12] = 0x90;
+    datagram[13] = 0x00;
+    datagram[14] = 0x00;
+    datagram[15] = 0x00;
+
+    quint32 fre = 10000000;
+    fre += freValue;
+    quint32 amp = getAmplitude(fre);//获取频率对应的幅度值
+    QString str1 = QString::number(fre, 16);
+    QByteArray datagram1;
+    if(str1.size() < 8)
+    {
+        QString tmp;
+        int length = 8 - str1.size();
+        for(int i = 0; i < length; i++)
+        {
+            tmp = tmp + "0";
+        }
+        str1 = tmp + str1;
+    }
+    datagram1 = hexStringtoByteArray(str1);
+    datagram1.resize(4);
+
+    datagram[16] = datagram1[3];
+    datagram[17] = datagram1[2];
+    datagram[18] = datagram1[1];
+    datagram[19] = datagram1[0];
+
+    //幅度
+    datagram[20] = 0x97;
+    datagram[21] = 0x00;
+    datagram[22] = 0x00;
+    datagram[23] = 0x00;
+    QString str2 = QString::number(amp, 16);
+    QByteArray datagram2;
+    if(str2.size() < 2)
+    {
+        QString tmp;
+        int length = 2 - str2.size();
+        for(int i = 0; i < length; i++)
+        {
+             tmp = tmp + "0";
+        }
+            str2 = tmp + str2;
+    }
+    datagram2 = hexStringtoByteArray(str2);
+    datagram2.resize(1);
+
+    datagram[24] = datagram2[0];
+    datagram[25] = datagram2[0];
+    datagram[26] = 0x00;
+    datagram[27] = 0x00;
+
+    //功放控制
+    datagram[28] = 0xB0;
+    datagram[29] = 0x00;
+    datagram[30] = 0x00;
+    datagram[31] = 0x00;
+    datagram[32] = 0x00;
+    datagram[33] = 0x00;
+    datagram[34] = 0x00;
+    datagram[35] = 0x00;
+
+    //射频开关控制线
+    datagram[36] = 0xB1;
+    datagram[37] = 0x00;
+    datagram[38] = 0x00;
+    datagram[39] = 0x00;
+    datagram[40] = 0x0A;
+    datagram[41] = 0x00;
+    datagram[42] = 0x00;
+    datagram[43] = 0x00;
+
+    //衰减器控制
+    datagram[44] = 0xB2;
+    datagram[45] = 0x00;
+    datagram[46] = 0x00;
+    datagram[47] = 0x00;
+    datagram[48] = 0x03;
+    datagram[49] = 0x00;
+    datagram[50] = 0x03;
+    datagram[51] = 0x00;
+
+    //检波开关控制
+    datagram[52] = 0xB3;
+    datagram[53] = 0x00;
+    datagram[54] = 0x00;
+    datagram[55] = 0x00;
+    datagram[56] = 0x00;
+    datagram[57] = 0x00;
+    datagram[58] = 0x00;
+    datagram[59] = 0x00;
+
+    //功放控制
+    datagram[60] = 0xB0;
+    datagram[61] = 0x00;
+    datagram[62] = 0x00;
+    datagram[63] = 0x00;
+    datagram[64] = 0x00;
+    datagram[65] = 0x00;
+    datagram[66] = 0x00;
+    datagram[67] = 0x00;
+
+    //帧尾
+    for(int i = 0; i < 8; i++)
+    {
+        datagram[i + 68] = 0xAA;
+    }
+
+    setClient->write(datagram);
+    m_cmd = CMD_INIT_AD9371;
+}
+
+void Widget::initPL()
+{
+    QByteArray datagram;
+    datagram.resize(64);
+    //帧头
+    for(int i = 0; i < 8; i++)
+    {
+        datagram[i] = 0x1A;
+    }
+
+    //参数个数
+    datagram[8] = 0x0C;
+    datagram[9] = 0x00;
+    datagram[10] = 0x00;
+    datagram[11] = 0x00;
+
+    //参数
+    datagram[12] = 0x01;
+    datagram[13] = 0x00;
+    datagram[14] = 0xFF;
+    datagram[15] = 0xFF;
+
+    datagram[16] = 0x02;
+    datagram[17] = 0x00;
+    datagram[18] = 0xFF;
+    datagram[19] = 0xFF;
+
+    datagram[20] = 0x03;
+    datagram[21] = 0x00;
+    datagram[22] = 0xFF;
+    datagram[23] = 0xFF;
+
+    datagram[24] = 0x04;
+    datagram[25] = 0x00;
+    datagram[26] = 0xFF;
+    datagram[27] = 0xFF;
+
+    datagram[28] = 0x05;
+    datagram[29] = 0x00;
+    datagram[30] = 0xFF;
+    datagram[31] = 0xFF;
+
+    datagram[32] = 0x06;
+    datagram[33] = 0x00;
+    datagram[34] = 0xFF;
+    datagram[35] = 0xFF;
+
+    datagram[36] = 0x07;
+    datagram[37] = 0x00;
+    datagram[38] = 0x00;
+    datagram[39] = 0x00;
+
+    datagram[40] = 0x08;
+    datagram[41] = 0x00;
+    datagram[42] = 0x00;
+    datagram[43] = 0x20;
+
+    datagram[44] = 0x09;
+    datagram[45] = 0x00;
+    datagram[46] = 0x00;
+    datagram[47] = 0x00;
+
+    datagram[48] = 0x0A;
+    datagram[49] = 0x00;
+    datagram[50] = 0x00;
+    datagram[51] = 0x00;
+
+    datagram[52] = 0x0B;
+    datagram[53] = 0x00;
+    datagram[54] = 0x01;
+    datagram[55] = 0x00;
+
+    //帧尾
+    for(int i = 0; i < 8; i++)
+    {
+        datagram[i + 56] = 0xAA;
+    }
+
+    setClient->write(datagram);
+    m_cmd = CMD_INIT_PL;
 }
 
 void Widget::on_openBtn_clicked()
@@ -2807,20 +3226,20 @@ void Widget::on_openBtn_clicked()
     if(name.contains('_'))
     {
         QStringList list1 = name.split('_');
-        QListWidgetItem *item = ui->listWidget->item(2);
+        QListWidgetItem *item = ui->listWidget->item(3);
         item->setText(list1.at(0));
 
         QStringList list2 = list1.at(1).split('.');
-        item = ui->listWidget->item(3);
+        item = ui->listWidget->item(4);
         item->setText("码速率" + list2.at(0));
     }
     else
     {
         QStringList list1 = name.split('.');
-        QListWidgetItem *item = ui->listWidget->item(2);
+        QListWidgetItem *item = ui->listWidget->item(3);
         item->setText(list1.at(0));
 
-        item = ui->listWidget->item(3);
+        item = ui->listWidget->item(4);
         item->setText(" ");
     }
 
@@ -2828,15 +3247,18 @@ void Widget::on_openBtn_clicked()
     {
         ui->pushButton->setIcon(QIcon(":/image/start.png"));
         ui->label_14->setText(QString("启动"));
-        QListWidgetItem *item = ui->listWidget->item(0);
+        QListWidgetItem *item = ui->listWidget->item(1);
         item->setText(QString("信号源已关闭"));
         endFlag = true;
         ui->roundBar1->setValue(0);
         startOrStop = false;
         ui->widget_6->setEnabled(true);
         ui->widget_8->setEnabled(true);
-        ui->amplifierClose->setChecked(true);
-        on_amplifierClose_clicked(true);
+        if(ui->amplifierOpen->isChecked())
+        {
+            ui->amplifierClose->setChecked(true);
+            on_amplifierClose_clicked(true);
+        }
     }
 
     localFile = new QFile(fileName);
@@ -2912,20 +3334,37 @@ void Widget::on_amplifierClose_clicked(bool checked)
 {
     if(checked)
     {
-        QListWidgetItem *item = ui->listWidget->item(1);
+        QListWidgetItem *item = ui->listWidget->item(2);
         item->setText(QString("功放(关)"));
-        ui->label_4->setText("-");
-        ui->dwidget2->setMaxIndex(9);
-        ui->dwidget1->setMaxIndex(9);
+        if(ui->label_4->text() != "-")
+        {
+            ui->label_4->setText("-");
 
-        QString str_value = QString::number(ui->dwidget1->getCurrentIndex()) + QString::number(ui->dwidget2->getCurrentIndex()) + QString::number(ui->dwidget3->getCurrentIndex());
-        int value = str_value.toInt();
-        value = 370 - value;
+            ui->dwidget2->setMaxIndex(9);
+            ui->dwidget1->setMaxIndex(9);
 
-        ui->dwidget1->setCurrentIndex(value / 100 % 10);
-        ui->dwidget2->setCurrentIndex(value / 10 % 10);
-        ui->dwidget3->setCurrentIndex(value % 10);
-    }
+            QString str_value = QString::number(ui->dwidget1->getCurrentIndex()) + QString::number(ui->dwidget2->getCurrentIndex()) + QString::number(ui->dwidget3->getCurrentIndex());
+            int value = str_value.toInt();
+            value = 370 - value;
+
+            ui->dwidget1->setCurrentIndex(value / 100 % 10);
+            ui->dwidget2->setCurrentIndex(value / 10 % 10);
+            ui->dwidget3->setCurrentIndex(value % 10);
+        }
+        else
+        {
+            ui->dwidget2->setMaxIndex(9);
+            ui->dwidget1->setMaxIndex(9);
+
+            QString str_value = QString::number(ui->dwidget1->getCurrentIndex()) + QString::number(ui->dwidget2->getCurrentIndex()) + QString::number(ui->dwidget3->getCurrentIndex());
+            int value = str_value.toInt();
+            value = 370 + value;
+
+            ui->dwidget1->setCurrentIndex(value / 100 % 10);
+            ui->dwidget2->setCurrentIndex(value / 10 % 10);
+            ui->dwidget3->setCurrentIndex(value % 10);
+        }
+     }
 }
 
 void Widget::on_amplifierOpen_clicked(bool checked)
@@ -2935,7 +3374,7 @@ void Widget::on_amplifierOpen_clicked(bool checked)
         QString result = AmplifierWidget::showMyMessageBox(this);
         if(result == "ok")
         {
-            QListWidgetItem *item = ui->listWidget->item(1);
+            QListWidgetItem *item = ui->listWidget->item(2);
             item->setText(QString("功放(开)"));
             QString str_value = QString::number(ui->dwidget1->getCurrentIndex()) + QString::number(ui->dwidget2->getCurrentIndex()) + QString::number(ui->dwidget3->getCurrentIndex());
             int value = str_value.toInt();
@@ -2955,7 +3394,6 @@ void Widget::on_amplifierOpen_clicked(bool checked)
             ui->dwidget3->setCurrentIndex(value % 10);
 
             ui->dwidget1->setMaxIndex(3);
-           // on_negativeBtn_clicked();
         }
         else
         {
@@ -3149,5 +3587,14 @@ bool Widget::MySystemShutDown()
           return false;
      return true;
 */
+}
+
+void Widget::initDevice()
+{
+    if (!m_bInit)
+    {
+        m_bInit = true;
+        pressureControl();
+    }
 }
 
